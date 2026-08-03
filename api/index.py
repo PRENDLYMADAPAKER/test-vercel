@@ -615,7 +615,7 @@ def extract_stream_for_episode(target_id: str, drama_id: Optional[str] = None, t
 
 
 # -----------------------------------------------------------------------------
-# API ROUTES
+# API ROUTES (STACKED DECORATORS SOLVE VERCEL 404 PATH STRIPPING)
 # -----------------------------------------------------------------------------
 @app.route('/', methods=['GET'])
 @app.route('/api', methods=['GET'])
@@ -623,6 +623,7 @@ def health_check():
     return jsonify({"status": "healthy", "message": "KissKH API is operational on Vercel"}), 200
 
 
+@app.route('/sub/decrypt', methods=['GET'])
 @app.route('/api/sub/decrypt', methods=['GET'])
 def decrypt_sub():
     sub_url = request.args.get('url')
@@ -661,6 +662,7 @@ def decrypt_sub():
         return jsonify({"status": "error", "message": f"Subtitle processing failed: {str(e)}"}), 500
 
 
+@app.route('/extract', methods=['GET'])
 @app.route('/api/extract', methods=['GET'])
 def extract():
     url = request.args.get('url')
@@ -685,6 +687,7 @@ def extract():
     return jsonify(extract_stream_for_episode(target_id, drama_id=drama_id, title=title))
 
 
+@app.route('/resolve', methods=['GET'])
 @app.route('/api/resolve', methods=['GET'])
 def resolve():
     raw_title = request.args.get('title', '')
