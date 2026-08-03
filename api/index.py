@@ -5,7 +5,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from urllib.parse import quote_plus, urlparse, parse_qs
 
-from curl_cffi import requests
+import requests
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 from flask import Flask, request, jsonify, Response
@@ -85,8 +85,8 @@ def add_cors_headers(response):
 
 
 def create_session(referer_url: str) -> requests.Session:
-    """Creates an impersonated Chrome session configured with dynamic Referer/Origin."""
-    session = requests.Session(impersonate="chrome124")
+    """Creates a standard requests Session configured with dynamic Referer/Origin."""
+    session = requests.Session()
     headers = DEFAULT_HEADERS.copy()
     headers['Referer'] = referer_url
     headers['Origin'] = referer_url.rsplit('/', 1)[0] if '/' in referer_url else referer_url
@@ -177,7 +177,7 @@ def get_imdb_id(title: str) -> Optional[str]:
         slug = clean_t.replace(' ', '_')
         url = f"https://v2.sg.media-imdb.com/suggestion/{first_char}/{slug}.json"
         
-        resp = requests.get(url, timeout=5)
+        resp = requests.get(url, timeout=2.5)
         if resp.status_code == 200:
             data = resp.json()
             results = data.get("d", [])
@@ -218,7 +218,7 @@ def fetch_stremio_subtitles(title: str, episode_num: str = "1", season_num: str 
         for id_fmt in id_formats:
             target_url = f"{addon_base}/subtitles/{id_fmt}"
             try:
-                resp = session.get(target_url, timeout=6)
+                resp = session.get(target_url, timeout=2.5)
                 if resp.status_code == 200:
                     data = resp.json()
                     sub_list = data.get("subtitles", [])
@@ -256,7 +256,7 @@ def fetch_subtitles_from_gas(episode_id: str) -> List[Dict[str, Any]]:
     gas_url = f"{GAS_SUB_ENDPOINT}{episode_id}"
 
     try:
-        response = requests.get(gas_url, timeout=8, allow_redirects=True)
+        response = requests.get(gas_url, timeout=3, allow_redirects=True)
         if response.status_code == 200:
             data = response.json()
             sub_list = data if isinstance(data, list) else (data.get("subtitles") or data.get("subs") or [] if isinstance(data, dict) else [])
@@ -318,7 +318,7 @@ def extract_third_party_subtitles(third_party_url: str) -> List[Dict[str, Any]]:
 
     if not subs:
         try:
-            resp = session.get(third_party_url, timeout=6)
+            resp = session.get(third_party_url, timeout=2.5)
             if resp.status_code == 200:
                 html = resp.text
                 matches = re.findall(
@@ -361,7 +361,7 @@ def check_m3u8_subtitles(m3u8_url: str) -> List[Dict[str, Any]]:
 
     for m_url in m3u8_targets:
         try:
-            resp = session.get(m_url, timeout=5)
+            resp = session.get(m_url, timeout=2)
             if resp.status_code == 200 and '#EXT-X-MEDIA:TYPE=SUBTITLES' in resp.text:
                 for line in resp.text.splitlines():
                     if line.startswith('#EXT-X-MEDIA:TYPE=SUBTITLES'):
@@ -411,9 +411,9 @@ def check_m3u8_subtitles(m3u8_url: str) -> List[Dict[str, Any]]:
     seen = set()
     deduped_candidates = [x for x in possible_vtt_urls if not (x in seen or seen.add(x))]
 
-    for vtt_candidate in deduped_candidates:
+    for vtt_candidate in deduped_candidates[:6]:  # Limit candidates to stay within serverless limits
         try:
-            v_resp = session.get(vtt_candidate, timeout=3, stream=True)
+            v_resp = session.get(vtt_candidate, timeout=1.5, stream=True)
             if v_resp.status_code in (200, 206):
                 content_sample = v_resp.raw.read(100).decode('utf-8', errors='ignore').lower()
                 if "<html" not in content_sample and "<!doctype" not in content_sample:
@@ -459,9 +459,6 @@ def fetch_kisskh_page_subtitles(drama_id: Optional[str], episode_id: str, video_
                 f"https://{sub_host}/sub/{drama_id}/{episode_id}{ext}",
                 f"https://{sub_host}/sub/{drama_id}/Ep{ep_num}{ext}",
                 f"https://{sub_host}/auto_upload/{drama_id}/{episode_id}{ext}",
-                f"https://{sub_host}/auto_upload/{drama_id}/Ep{ep_num}{ext}",
-                f"https://{sub_host}/{drama_id}/{episode_id}{ext}",
-                f"https://{sub_host}/{drama_id}/Ep{ep_num}{ext}",
             ])
 
     seen = set()
@@ -469,7 +466,7 @@ def fetch_kisskh_page_subtitles(drama_id: Optional[str], episode_id: str, video_
 
     for candidate_url in deduped:
         try:
-            resp = session.get(candidate_url, timeout=3, stream=True)
+            resp = session.get(candidate_url, timeout=1.5, stream=True)
             if resp.status_code in (200, 206):
                 content_sample = resp.raw.read(100).decode('utf-8', errors='ignore').lower()
                 if "<html" not in content_sample and "<!doctype" not in content_sample:
@@ -502,7 +499,7 @@ def extract_stream_for_episode(target_id: str, drama_id: Optional[str] = None, t
         if not video_data:
             stream_api_url = f"{base_domain}/api/DramaList/Episode/{target_id}.png?err=false&ts=null&time=null&kkey={token}"
             try:
-                v_resp = session.get(stream_api_url, timeout=10)
+                v_resp = session.get(stream_api_url, timeout=2.5)
                 if v_resp.status_code == 200:
                     video_data = v_resp.json()
                     video_status = "200"
@@ -513,14 +510,12 @@ def extract_stream_for_episode(target_id: str, drama_id: Optional[str] = None, t
 
         sub_urls_to_try = [
             f"{base_domain}/api/Sub/{target_id}",
-            f"{base_domain}/api/Sub?ep_id={target_id}",
-            f"{base_domain}/api/Sub/{target_id}?kkey={token}",
-            f"{base_domain}/api/Sub?ep_id={target_id}&kkey={token}"
+            f"{base_domain}/api/Sub?ep_id={target_id}"
         ]
         
         for sub_api_url in sub_urls_to_try:
             try:
-                sub_resp = session.get(sub_api_url, timeout=10)
+                sub_resp = session.get(sub_api_url, timeout=2)
                 
                 if sub_resp.status_code == 200:
                     raw_subs = sub_resp.json()
@@ -568,7 +563,6 @@ def extract_stream_for_episode(target_id: str, drama_id: Optional[str] = None, t
             break
 
     # Tiered Fallback Cascade for Subtitles
-    # 1. Direct Stream / CDN Sidecar Probe
     primary_m3u8 = video_data.get("Video")
     if not formatted_subtitles and primary_m3u8:
         m3u8_subs = check_m3u8_subtitles(primary_m3u8)
@@ -576,14 +570,12 @@ def extract_stream_for_episode(target_id: str, drama_id: Optional[str] = None, t
             formatted_subtitles = m3u8_subs
             sub_status += f" -> Extracted {len(m3u8_subs)} sub(s) from CDN video stream"
 
-    # 2. GAS Proxy
     if not formatted_subtitles:
         gas_subs = fetch_subtitles_from_gas(target_id)
         if gas_subs:
             formatted_subtitles = gas_subs
             sub_status += f" -> Extracted {len(gas_subs)} sub(s) via Google Apps Script Proxy"
 
-    # 3. Third Party Embed
     third_party_url = video_data.get("ThirdParty")
     if not formatted_subtitles and third_party_url:
         tp_subs = extract_third_party_subtitles(third_party_url)
@@ -591,7 +583,6 @@ def extract_stream_for_episode(target_id: str, drama_id: Optional[str] = None, t
             formatted_subtitles = tp_subs
             sub_status += f" -> Extracted {len(tp_subs)} sub(s) from third_party embed"
 
-    # 4. KissKH Page Scraper / Direct Sub CDN
     if not formatted_subtitles:
         page_subs = fetch_kisskh_page_subtitles(
             drama_id=drama_id,
@@ -602,7 +593,6 @@ def extract_stream_for_episode(target_id: str, drama_id: Optional[str] = None, t
             formatted_subtitles = page_subs
             sub_status += f" -> Extracted {len(page_subs)} sub(s) via KissKH Page/CDN Extractor"
 
-    # 5. External Providers (OpenSubtitles v3 & YaStream via Stremio protocol)
     if not formatted_subtitles and title:
         ext_subs = fetch_stremio_subtitles(title=title, episode_num=ep_num)
         if ext_subs:
@@ -627,6 +617,12 @@ def extract_stream_for_episode(target_id: str, drama_id: Optional[str] = None, t
 # -----------------------------------------------------------------------------
 # API ROUTES
 # -----------------------------------------------------------------------------
+@app.route('/', methods=['GET'])
+@app.route('/api', methods=['GET'])
+def health_check():
+    return jsonify({"status": "healthy", "message": "KissKH API is operational on Vercel"}), 200
+
+
 @app.route('/api/sub/decrypt', methods=['GET'])
 def decrypt_sub():
     sub_url = request.args.get('url')
@@ -638,13 +634,12 @@ def decrypt_sub():
 
     try:
         session = create_session("https://kisskh.do/")
-        resp = session.get(sub_url, timeout=10)
+        resp = session.get(sub_url, timeout=3)
         if resp.status_code != 200:
             return jsonify({"status": "error", "message": f"Failed downloading subtitle file (HTTP {resp.status_code})"}), 500
 
         raw_bytes = resp.content
 
-        # Auto-decompress gzip standard (.gz) files from OpenSubtitles/Stremio
         if raw_bytes[:2] == b'\x1f\x8b':
             try:
                 raw_bytes = gzip.decompress(raw_bytes)
@@ -704,7 +699,7 @@ def resolve():
     for domain in DOMAINS:
         search_url = f"{domain}/api/DramaList/Search?q={quote_plus(query_title)}"
         try:
-            search_resp = create_session(domain).get(search_url, timeout=10)
+            search_resp = create_session(domain).get(search_url, timeout=2.5)
             if search_resp.status_code == 200 and search_resp.json():
                 dramas = search_resp.json()
                 break
@@ -717,7 +712,7 @@ def resolve():
             for domain in DOMAINS:
                 fallback_url = f"{domain}/api/DramaList/Search?q={quote_plus(base_title)}"
                 try:
-                    fallback_resp = create_session(domain).get(fallback_url, timeout=10)
+                    fallback_resp = create_session(domain).get(fallback_url, timeout=2.5)
                     if fallback_resp.status_code == 200 and fallback_resp.json():
                         dramas = fallback_resp.json()
                         break
@@ -730,13 +725,11 @@ def resolve():
     target_drama = None
     query_lower = query_title.lower()
 
-    # 1. Exact Match
     for d in dramas:
         if d.get('title', '').lower() == query_lower:
             target_drama = d
             break
 
-    # 2. Subset Match
     if not target_drama:
         query_words = set(re.findall(r'\w+', query_lower))
         for d in dramas:
@@ -745,7 +738,6 @@ def resolve():
                 target_drama = d
                 break
 
-    # 3. Substring Match
     if not target_drama:
         for d in dramas:
             d_title = d.get('title', '').lower()
@@ -767,7 +759,7 @@ def resolve():
     for domain in DOMAINS:
         drama_detail_url = f"{domain}/api/DramaList/Drama/{drama_id}"
         try:
-            detail_resp = create_session(domain).get(drama_detail_url, timeout=10)
+            detail_resp = create_session(domain).get(drama_detail_url, timeout=2.5)
             if detail_resp.status_code == 200:
                 episodes = detail_resp.json().get('episodes', [])
                 break
